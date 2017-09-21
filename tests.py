@@ -6,6 +6,7 @@ from net2net import wider, deeper
 
 
 class Net(nn.Module):
+
     def __init__(self):
         super(Net, self).__init__()
         self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
@@ -13,6 +14,7 @@ class Net(nn.Module):
         self.conv2_drop = nn.Dropout2d()
         self.fc1 = nn.Linear(320, 50)
         self.fc2 = nn.Linear(50, 10)
+
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
@@ -24,7 +26,9 @@ class Net(nn.Module):
         return F.log_softmax(x)
 
 
+
 class Net3D(nn.Module):
+
     def __init__(self):
         super(Net3D, self).__init__()
         self.conv1 = nn.Conv3d(1, 10, kernel_size=5)
@@ -32,6 +36,7 @@ class Net3D(nn.Module):
         self.conv2_drop = nn.Dropout2d()
         self.fc1 = nn.Linear(320, 50)
         self.fc2 = nn.Linear(50, 10)
+
 
     def forward(self, x):
         x = F.relu(F.max_pool3d(self.conv1(x), 2))
@@ -43,10 +48,13 @@ class Net3D(nn.Module):
         return F.log_softmax(x)
 
 
+
 class TestOperators(unittest.TestCase):
+
 
     def _create_net(self):
         return Net()
+
 
     def test_wider(self):
         net = self._create_net()
@@ -98,6 +106,34 @@ class TestOperators(unittest.TestCase):
         nout = net(inp)
         assert th.abs((out - nout).sum().data)[0] < 1e-1
         assert nout.size(0) == 32 and nout.size(1) == 10
+
+        # testing noise
+        net = self._create_net()
+        inp = th.autograd.Variable(th.rand(32, 1, 28, 28))
+
+        net.eval()
+        out = net(inp)
+
+        conv1, conv2, _ = wider(net._modules['conv1'],
+                                net._modules['conv2'],
+                                20,
+                                noise_var=1)
+
+        net._modules['conv1'] = conv1
+        net._modules['conv2'] = conv2
+
+        conv2, fc1, _ = wider(net._modules['conv2'],
+                              net._modules['fc1'],
+                              60,
+                              noise_var=1)
+        net._modules['conv2'] = conv2
+        net._modules['fc1'] = fc1
+
+        net.eval()
+        nout = net(inp)
+        assert th.abs((out - nout).sum().data)[0] > 1e-1
+        assert nout.size(0) == 32 and nout.size(1) == 10
+
 
     def test_deeper(self):
         net = self._create_net()

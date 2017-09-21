@@ -7,7 +7,7 @@ def _wrap_net(nn):
     return th.nn.ModuleList(nn._modules)
 
 
-def wider(m1, m2, new_width, bnorm=None, out_size=None):
+def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
     """
     Convert m1 layer to its wider version by adapthing next weight layer and
     possible batch norm layer in btw.
@@ -19,6 +19,8 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None):
         out_size (list, optional) - necessary for m1 == conv3d and m2 == linear. It
             is 3rd dim size of the output feature map of m1. Used to compute
             the matching Linear layer size
+        noise_var (optional) - add a sligh noise to break symmetry btw weights.
+            This sets the variance used for smapling the noise.
     """
 
     w1 = m1.weight.data
@@ -111,6 +113,13 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None):
         m1.out_channels = new_width
         m2.in_channels = new_width
 
+        # TODO: look for other smart ways to break symmetry possibly yielding
+        # better representation.
+        if noise_var is not None:
+            w1noise = np.random.normal(scale=noise_var,
+                                       size=nw1.shape)
+            nw1 += th.FloatTensor(w1noise)
+
         m1.weight.data = nw1
 
         if "Conv" in m1.__class__.__name__ and "Linear" in m2.__class__.__name__:
@@ -133,7 +142,7 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None):
                 bnorm.bias = nbias
         return m1, m2, bnorm
 
-
+# TODO: Consider adding noise to new layer as wider operator.
 def deeper(m, nonlin, bnorm_flag=False):
     if "Linear" in m.__class__.__name__:
         m2 = th.nn.Linear(m.out_features, m.out_features)
