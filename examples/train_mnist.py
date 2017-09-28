@@ -9,6 +9,7 @@ from torch.autograd import Variable
 import sys
 sys.path.append('../')
 from net2net import *
+import copy
 
 
 # Training settings
@@ -66,15 +67,21 @@ class Net(nn.Module):
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
         x = x.view(-1, x.size(1)*x.size(2)*x.size(3))
-        print(x.size())
         x = F.relu(self.fc1(x))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
         return F.log_softmax(x)
 
     def net2net_wider(self):
-        self.conv1, self.conv2, _ = wider(self.conv1, self.conv2, 15)
-        self.conv2, self.fc1, _ = wider(self.conv2, self.fc1, 30)
+        self.conv1, self.conv2, _ = wider(self.conv1, self.conv2, 15, noise_var=0.01)
+        self.conv2, self.fc1, _ = wider(self.conv2, self.fc1, 30, noise_var=0.01)
+        print(self)
+
+    def net2net_deeper(self):
+        s = deeper(self.conv1, nn.ReLU, bnorm_flag=False)
+        self.conv1 = s
+        s = deeper(self.conv2, nn.ReLU, bnorm_flag=False)
+        self.conv2 = s
         print(self)
 
     def define_wider(self):
@@ -83,18 +90,13 @@ class Net(nn.Module):
         self.fc1 = nn.Linear(480, 50)
 
     def define_wider_deeper(self):
-        self.conv1 = th.nn.Sequential({nn.Conv2d(1, 15, kernel_size=5),
-                                       nn.ReLU(in_place=True),
-                                       nn.Conv2d(15, 15, kernel_size=5)})
-        self.conv2 = th.nn.Sequential({nn.Conv2d(15, 30, kernel_size=5),
-                                       nn.ReLU(in_place=True),
-                                       nn.Conv2d(30, 30, kernel_size=5)})
-
-    def net2net_deeper(self):
-        s = deeper(self.conv1, nn.ReLU, bnorm_flag=False)
-        self.conv1 = s
-        s = deeper(self.conv2, nn.ReLU, bnorm_flag=False)
-        self.conv2 = s
+        self.conv1 = nn.Sequential(nn.Conv2d(1, 15, kernel_size=5),
+                                      nn.ReLU(),
+                                      nn.Conv2d(15, 15, kernel_size=5, padding=2))
+        self.conv2 = nn.Sequential(nn.Conv2d(15, 30, kernel_size=5),
+                                      nn.ReLU(),
+                                      nn.Conv2d(30, 30, kernel_size=5, padding=2))
+        self.fc1 = nn.Linear(480, 50)
 
 
 model = Net()
@@ -140,7 +142,7 @@ def test():
         100. * correct / len(test_loader.dataset)))
     return 100. * correct / len(test_loader.dataset)
 
-
+print("\n\n > Teacher training ... ")
 # treacher training
 for epoch in range(1, args.epochs + 1):
     train(epoch)
@@ -148,6 +150,12 @@ for epoch in range(1, args.epochs + 1):
 
 
 # wider student training
+print("\n\n > Wider Student training ... ")
+model_ = Net()
+model_ = copy.deepcopy(model)
+
+del model
+model = model_
 model.net2net_wider()
 model.cuda()
 optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
@@ -157,26 +165,50 @@ for epoch in range(1, args.epochs + 1):
 
 
 # wider + deeper student training
-#model.net2net_deeper()
-#optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-#for epoch in range(1, args.epochs + 1):
-#    train(epoch)
-#    deeper_accu = test()
-#
-#
-## wider teacher training
-#model = Net()
-#model.define_wider()
-#optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-#for epoch in range(1, args.epochs + 1):
-#    train(epoch)
-#    wider_teacher_accu = test()
-#
-#
-## wider deeper teacher training
-#model = Net()
-#model.define_wider_deeper()
-#optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-#for epoch in range(1, args.epochs + 1):
-#    train(epoch)
-#    wider_teacher_accu = test()
+print("\n\n > Wider+Deeper Student training ... ")
+model_ = Net()
+model_ = copy.deepcopy(model)
+
+del model
+model = model_
+model.net2net_deeper()
+model.cuda()
+optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+for epoch in range(1, args.epochs + 1):
+    train(epoch)
+    deeper_accu = test()
+
+
+# wider teacher training
+print("\n\n > Wider teacher training ... ")
+model_ = Net()
+
+del model
+model = model_
+model.define_wider()
+model.cuda()
+optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+for epoch in range(1, 2*(args.epochs) + 1):
+    train(epoch)
+    wider_teacher_accu = test()
+
+
+# wider deeper teacher training
+print("\n\n > Wider+Deeper teacher training ... ")
+model_ = Net()
+
+del model
+model = model_
+model.define_wider_deeper()
+model.cuda()
+optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+for epoch in range(1, 3*(args.epochs) + 1):
+    train(epoch)
+    wider_deeper_teacher_accu = test()
+
+
+print(" -> Teacher:\t{}".format(teacher_accu))
+print(" -> Wider model:\t{}".format(wider_accu))
+print(" -> Deeper-Wider model:\t{}".format(deeper_accu))
+print(" -> Wider teacher:\t{}".format(wider_teacher_accu))
+print(" -> Deeper-Wider teacher:\t{}".format(wider_deeper_teacher_accu))

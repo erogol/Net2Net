@@ -18,7 +18,7 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
         bn (optional) - batch norm layer, if there is btw m1 and m2
         out_size (list, optional) - necessary for m1 == conv3d and m2 == linear. It
             is 3rd dim size of the output feature map of m1. Used to compute
-            the matching Linear layer size
+            the matching Linear layer size
         noise_var (optional) - add a sligh noise to break symmetry btw weights.
             This sets the variance used for smapling the noise.
     """
@@ -83,6 +83,11 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
                 nweight.narrow(0, 0, old_width).copy_(bnorm.weight)
                 nbias.narrow(0, 0, old_width).copy_(bnorm.bias)
 
+        # TEST:normalize weights
+        for i in range(old_width):
+            norm = w1.select(0, i).norm()
+            w1.select(0, i).div_(norm)
+
         # select weights randomly
         tracking = dict()
         for i in range(old_width, new_width):
@@ -92,6 +97,11 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
             except:
                 tracking[idx] = [idx]
                 tracking[idx].append(i)
+
+            # TEST:random init for new units
+            n = m1.kernel_size[0] * m1.kernel_size[1] * m1.out_channels
+            w1.select(0, idx).normal_(0, np.sqrt(2. / n))
+
             nw1.select(0, i).copy_(w1.select(0, idx).clone())
             nw2.select(0, i).copy_(w2.select(0, idx).clone())
             nb1[i] = b1[idx]
@@ -113,12 +123,10 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
         m1.out_channels = new_width
         m2.in_channels = new_width
 
-        # TODO: look for other smart ways to break symmetry possibly yielding
-        # better representation.
         if noise_var is not None:
-            w1noise = np.random.normal(scale=noise_var,
-                                       size=nw1.shape)
-            nw1 += th.FloatTensor(w1noise)
+            noise = np.random.normal(scale=5e-2 * nw1.std(),
+                                     size=list(nw1.size()))
+            nw1 += th.FloatTensor(noise).type_as(nw1)
 
         m1.weight.data = nw1
 
@@ -184,6 +192,13 @@ def deeper(m, nonlin, bnorm_flag=False):
                                                  m2.in_channels,
                                                  m2.kernel_size[0],
                                                  m2.kernel_size[0])
+
+        # TEST:normalize weights
+        for i in range(m.out_channels):
+            weight = m.weight.data
+            norm = weight.select(0, i).norm()
+            weight.div_(norm)
+            m.weight.data = weight
 
         for i in range(0, m.out_channels):
             if m.weight.dim() == 4:
