@@ -58,13 +58,17 @@ class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
         self.conv1 = nn.Conv2d(3, 8, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(8)
         self.pool1 = nn.MaxPool2d(3, 2)
         self.conv2 = nn.Conv2d(8, 16, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(16)
         self.pool2 = nn.MaxPool2d(3, 2)
         self.conv3 = nn.Conv2d(16, 32, 3, padding=1)
+        self.bn3 = nn.BatchNorm2d(32)
         self.pool3 = nn.AvgPool2d(5, 1)
-        self.fc1 = nn.Linear(32 * 3 * 3, 256)
-        self.fc2 = nn.Linear(256, 10)
+        self.fc1 = nn.Linear(32 * 3 * 3, 10)
+        #self.bn_fc = nn.BatchNorm1d(256)
+        #self.fc2 = nn.Linear(256, 10)
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
@@ -75,50 +79,71 @@ class Net(nn.Module):
 
     def forward(self, x):
         try:
-            x = self.pool1(F.relu(self.conv1(x)))
-            x = self.pool2(F.relu(self.conv2(x)))
-            #print(x.size())
-            x = self.pool3(F.relu(self.conv3(x)))
-            #print(x.size())
+            x = self.conv1(x)
+            x = self.bn1(x)
+            x = F.relu(x)
+            x = self.pool1(x)
+            x = self.conv2(x)
+            x = self.bn2(x)
+            x = F.relu(x)
+            x = self.pool2(x)
+            x = self.conv3(x)
+            x = self.bn3(x)
+            x = F.relu(x)
+            x = self.pool3(x)
             x = x.view(-1, x.size(1) * x.size(2) * x.size(3))
-            x = F.relu(self.fc1(x))
-            x = self.fc2(x)
+            x = self.fc1(x)
+            #x = self.bn_fc(x)
+            #x = F.relu(x)
+            #x = self.fc2(x)
             return F.log_softmax(x)
         except RuntimeError:
             print(x.size())
 
     def net2net_wider(self):
-        self.conv1, self.conv2, _ = wider(self.conv1, self.conv2, 12, noise_var=args.noise)
-        self.conv2, self.conv3, _ = wider(self.conv2, self.conv3, 24, noise_var=args.noise)
-        self.conv3, self.fc1, _ = wider(self.conv3, self.fc1, 48, noise_var=args.noise)
+        self.conv1, self.conv2, _ = wider(self.conv1, self.conv2, 12,
+                                          self.bn1, noise_var=args.noise)
+        self.conv2, self.conv3, _ = wider(self.conv2, self.conv3, 24,
+                                          self.bn2, noise_var=args.noise)
+        self.conv3, self.fc1, _ = wider(self.conv3, self.fc1, 48,
+                                        self.bn3, noise_var=args.noise)
         print(self)
 
     def net2net_deeper(self):
-        s = deeper(self.conv1, nn.ReLU, bnorm_flag=False)
+        s = deeper(self.conv1, nn.ReLU, bnorm_flag=True)
         self.conv1 = s
-        s = deeper(self.conv2, nn.ReLU, bnorm_flag=False)
+        s = deeper(self.conv2, nn.ReLU, bnorm_flag=True)
         self.conv2 = s
-        s = deeper(self.conv3, nn.ReLU, bnorm_flag=False)
+        s = deeper(self.conv3, nn.ReLU, bnorm_flag=True)
         self.conv3 = s
         print(self)
 
     def define_wider(self):
         self.conv1 = nn.Conv2d(3, 12, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(12)
         self.conv2 = nn.Conv2d(12, 24, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(24)
         self.conv3 = nn.Conv2d(24, 48, kernel_size=3, padding=1)
-        self.fc1 = nn.Linear(48*3*3, 256)
+        self.bn3 = nn.BatchNorm2d(48)
+        self.fc1 = nn.Linear(48*3*3, 10)
 
     def define_wider_deeper(self):
         self.conv1 = nn.Sequential(nn.Conv2d(3, 12, kernel_size=3, padding=1),
+                                   nn.BatchNorm2d(12),
                                    nn.ReLU(),
                                    nn.Conv2d(12, 12, kernel_size=3, padding=1))
+        self.bn1 = nn.BatchNorm2d(12)
         self.conv2 = nn.Sequential(nn.Conv2d(12, 24, kernel_size=3, padding=1),
+                                   nn.BatchNorm2d(24),
                                    nn.ReLU(),
                                    nn.Conv2d(24, 24, kernel_size=3, padding=1))
+        self.bn2 = nn.BatchNorm2d(24)
         self.conv3 = nn.Sequential(nn.Conv2d(24, 48, kernel_size=3, padding=1),
+                                   nn.BatchNorm2d(48),
                                    nn.ReLU(),
                                    nn.Conv2d(48, 48, kernel_size=3, padding=1))
-        self.fc1 = nn.Linear(48*3*3, 256)
+        self.bn3 = nn.BatchNorm2d(48)
+        self.fc1 = nn.Linear(48*3*3, 10)
         print(self)
 
 

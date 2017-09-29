@@ -63,8 +63,8 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
             nb1.resize_(new_width)
 
         if bnorm is not None:
-            nrunning_mean = bnorm.running_mean.data.clone().resize_(new_width)
-            nrunning_var = bnorm.running_var.data.clone().resize_(new_width)
+            nrunning_mean = bnorm.running_mean.clone().resize_(new_width)
+            nrunning_var = bnorm.running_var.clone().resize_(new_width)
             if bnorm.affine:
                 nweight = bnorm.weight.data.clone().resize_(new_width)
                 nbias = bnorm.bias.data.clone().resize_(new_width)
@@ -80,8 +80,8 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
             nrunning_var.narrow(0, 0, old_width).copy_(bnorm.running_var)
             nrunning_mean.narrow(0, 0, old_width).copy_(bnorm.running_mean)
             if bnorm.affine:
-                nweight.narrow(0, 0, old_width).copy_(bnorm.weight)
-                nbias.narrow(0, 0, old_width).copy_(bnorm.bias)
+                nweight.narrow(0, 0, old_width).copy_(bnorm.weight.data)
+                nbias.narrow(0, 0, old_width).copy_(bnorm.bias.data)
 
         # TEST:normalize weights
         for i in range(old_width):
@@ -100,22 +100,31 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
 
             # TEST:random init for new units
             n = m1.kernel_size[0] * m1.kernel_size[1] * m1.out_channels
-            w1.select(0, idx).normal_(0, np.sqrt(2. / n))
+            if m2.weight.dim() == 4:
+                n2 = m2.kernel_size[0] * m2.kernel_size[1] * m2.out_channels
+            elif m2.weight.dim() == 5:
+                n2 = m2.kernel_size[0] * m2.kernel_size[1] * m2.kernel_size[2] * m2.out_channels
+            elif m2.weight.dim() == 2:
+                n2 = m2.out_features * m2.in_features
+            nw1.select(0, i).normal_(0, np.sqrt(2./n))
+            nw2.select(0, i).normal_(0, np.sqrt(2./n2))
 
-            nw1.select(0, i).copy_(w1.select(0, idx).clone())
-            nw2.select(0, i).copy_(w2.select(0, idx).clone())
+            #nw1.select(0, i).copy_(w1.select(0, idx).clone())
+            #nw2.select(0, i).copy_(w2.select(0, idx).clone())
             nb1[i] = b1[idx]
 
         if bnorm is not None:
             nrunning_mean[i] = bnorm.running_mean[idx]
             nrunning_var[i] = bnorm.running_var[idx]
             if bnorm.affine:
-                nweight[i] = bnorm.weight[idx]
-                nbias[i] = bnorm.bias[idx]
+                nweight[i] = bnorm.weight.data[idx]
+                nbias[i] = bnorm.bias.data[idx]
+            bnorm.num_features = new_width
 
-        for idx, d in tracking.items():
-            for item in d:
-                nw2[item].div_(len(d))
+        # TEST:norm next layer weights
+        # for idx, d in tracking.items():
+        #    for item in d:
+        #        nw2[item].div_(len(d))
 
         w2.transpose_(0, 1)
         nw2.transpose_(0, 1)
@@ -146,8 +155,8 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
             bnorm.running_var = nrunning_var
             bnorm.running_mean = nrunning_mean
             if bnorm.affine:
-                bnorm.weight = nweight
-                bnorm.bias = nbias
+                bnorm.weight.data = nweight
+                bnorm.bias.data = nbias
         return m1, m2, bnorm
 
 # TODO: Consider adding noise to new layer as wider operator.
