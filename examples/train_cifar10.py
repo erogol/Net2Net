@@ -149,6 +149,20 @@ class Net(nn.Module):
         print(self)
 
 
+def net2net_deeper_recursive(model):
+    """
+    Apply deeper operator recursively any conv layer.
+    """
+    for name, module in model._modules.items():
+        if isinstance(module, nn.Conv2d):
+            s = deeper(module, nn.ReLU, bnorm_flag=False)
+            model._modules[name] = s
+        elif isinstance(module, nn.Sequential):
+            module = net2net_deeper_recursive(module)
+            model._modules[name] = module
+    return model
+
+
 def train(epoch):
     model.train()
     avg_loss = 0
@@ -210,63 +224,51 @@ def run_training(model, run_name):
         plot.plot(logs)
 
 
-def net2net_deeper_recursive(model):
-    for name, module in model._modules.items():
-        if isinstance(module, nn.Conv2d):
-            s = deeper(module, nn.ReLU, bnorm_flag=False)
-            model._modules[name] = s
-        elif isinstance(module, nn.Sequential):
-            module = net2net_deeper_recursive(module)
-            model._modules[name] = module
-    return model
+if __name__ == "__main__":
+
+    print("\n\n > Teacher training ... ")
+    model = Net()
+    model.cuda()
+    criterion = nn.NLLLoss()
+    run_training(model, 'Teacher_')
+
+    # wider student training
+    print("\n\n > Wider Student training ... ")
+    model_ = Net()
+    model_ = copy.deepcopy(model)
+
+    del model
+    model = model_
+    model.net2net_wider()
+    run_training(model, 'Wider_student_')
+
+    # wider + deeper student training
+    print("\n\n > Wider+Deeper Student training ... ")
+    model_ = Net()
+    model_.net2net_wider()
+    model_ = copy.deepcopy(model)
+
+    del model
+    model = model_
+    model.net2net_deeper()
+    run_training(model, 'WiderDeeper_student_')
+
+    # wider teacher training
+    print("\n\n > Wider teacher training ... ")
+    model_ = Net()
+
+    del model
+    model = model_
+    model.define_wider()
+    model.cuda()
+    run_training(model, 'Wider_teacher_')
 
 
-print("\n\n > Teacher training ... ")
-model = Net()
-model.cuda()
-# criterion = NLL_loss_instance(1)
-criterion = nn.NLLLoss()
-run_training(model, 'Teacher_')
+    # wider deeper teacher training
+    print("\n\n > Wider+Deeper teacher training ... ")
+    model_ = Net()
 
-
-# wider student training
-print("\n\n > Wider Student training ... ")
-model_ = Net()
-model_ = copy.deepcopy(model)
-
-del model
-model = model_
-model.net2net_wider()
-run_training(model, 'Wider_student_')
-
-# wider + deeper student training
-print("\n\n > Wider+Deeper Student training ... ")
-model_ = Net()
-model_.net2net_wider()
-model_ = copy.deepcopy(model)
-
-del model
-model = model_
-model.net2net_deeper()
-run_training(model, 'WiderDeeper_student_')
-
-# wider teacher training
-print("\n\n > Wider teacher training ... ")
-model_ = Net()
-
-del model
-model = model_
-model.define_wider()
-model.cuda()
-run_training(model, 'Wider_teacher_')
-
-
-# wider deeper teacher training
-print("\n\n > Wider+Deeper teacher training ... ")
-model_ = Net()
-
-del model
-model = model_
-model.define_wider_deeper()
-run_training(model, 'Wider_Deeper_teacher')
-
+    del model
+    model = model_
+    model.define_wider_deeper()
+    run_training(model, 'Wider_Deeper_teacher_')

@@ -3,11 +3,8 @@ import numpy as np
 from collections import Counter
 
 
-def _wrap_net(nn):
-    return th.nn.ModuleList(nn._modules)
-
-
-def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
+def wider(m1, m2, new_width, bnorm=None, out_size=None, noise=True,
+          random_init=True, weight_norm=True):
     """
     Convert m1 layer to its wider version by adapthing next weight layer and
     possible batch norm layer in btw.
@@ -18,9 +15,12 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
         bn (optional) - batch norm layer, if there is btw m1 and m2
         out_size (list, optional) - necessary for m1 == conv3d and m2 == linear. It
             is 3rd dim size of the output feature map of m1. Used to compute
-            the matching Linear layer size
-        noise_var (optional) - add a sligh noise to break symmetry btw weights.
-            This sets the variance used for smapling the noise.
+            the matching Linear layer size
+        noise (bool, True) - add a slight noise to break symmetry btw weights.
+        random_init (optional, True) - if True, new weights are initialized
+            randomly.
+        weight_norm (optional, True) - If True, weights are normalized before
+            transfering.
     """
 
     w1 = m1.weight.data
@@ -84,9 +84,10 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
                 nbias.narrow(0, 0, old_width).copy_(bnorm.bias.data)
 
         # TEST:normalize weights
-        for i in range(old_width):
-            norm = w1.select(0, i).norm()
-            w1.select(0, i).div_(norm)
+        if weight_norm:
+            for i in range(old_width):
+                norm = w1.select(0, i).norm()
+                w1.select(0, i).div_(norm)
 
         # select weights randomly
         tracking = dict()
@@ -99,18 +100,19 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
                 tracking[idx].append(i)
 
             # TEST:random init for new units
-            n = m1.kernel_size[0] * m1.kernel_size[1] * m1.out_channels
-            if m2.weight.dim() == 4:
-                n2 = m2.kernel_size[0] * m2.kernel_size[1] * m2.out_channels
-            elif m2.weight.dim() == 5:
-                n2 = m2.kernel_size[0] * m2.kernel_size[1] * m2.kernel_size[2] * m2.out_channels
-            elif m2.weight.dim() == 2:
-                n2 = m2.out_features * m2.in_features
-            nw1.select(0, i).normal_(0, np.sqrt(2./n))
-            nw2.select(0, i).normal_(0, np.sqrt(2./n2))
-
-            #nw1.select(0, i).copy_(w1.select(0, idx).clone())
-            #nw2.select(0, i).copy_(w2.select(0, idx).clone())
+            if random_init:
+                n = m1.kernel_size[0] * m1.kernel_size[1] * m1.out_channels
+                if m2.weight.dim() == 4:
+                    n2 = m2.kernel_size[0] * m2.kernel_size[1] * m2.out_channels
+                elif m2.weight.dim() == 5:
+                    n2 = m2.kernel_size[0] * m2.kernel_size[1] * m2.kernel_size[2] * m2.out_channels
+                elif m2.weight.dim() == 2:
+                    n2 = m2.out_features * m2.in_features
+                nw1.select(0, i).normal_(0, np.sqrt(2./n))
+                nw2.select(0, i).normal_(0, np.sqrt(2./n2))
+            else:
+                nw1.select(0, i).copy_(w1.select(0, idx).clone())
+                nw2.select(0, i).copy_(w2.select(0, idx).clone())
             nb1[i] = b1[idx]
 
         if bnorm is not None:
@@ -121,10 +123,10 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
                 nbias[i] = bnorm.bias.data[idx]
             bnorm.num_features = new_width
 
-        # TEST:norm next layer weights
-        # for idx, d in tracking.items():
-        #    for item in d:
-        #        nw2[item].div_(len(d))
+        if not random_init:
+            for idx, d in tracking.items():
+                for item in d:
+                    nw2[item].div_(len(d))
 
         w2.transpose_(0, 1)
         nw2.transpose_(0, 1)
@@ -132,7 +134,7 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
         m1.out_channels = new_width
         m2.in_channels = new_width
 
-        if noise_var is not None:
+        if noise:
             noise = np.random.normal(scale=5e-2 * nw1.std(),
                                      size=list(nw1.size()))
             nw1 += th.FloatTensor(noise).type_as(nw1)
@@ -159,8 +161,20 @@ def wider(m1, m2, new_width, bnorm=None, out_size=None, noise_var=None):
                 bnorm.bias.data = nbias
         return m1, m2, bnorm
 
+
 # TODO: Consider adding noise to new layer as wider operator.
-def deeper(m, nonlin, bnorm_flag=False):
+def deeper(m, nonlin, bnorm_flag=False, weight_norm=True, noise=True):
+    """
+    Deeper operator adding a new layer on topf of the given layer.
+    Args:
+        m (module) - module to add a new layer onto.
+        nonlin (module) - non-linearity to be used for the new layer.
+        bnorm_flag (bool, False) - whether add a batch normalization btw.
+        weight_norm (bool, True) - if True, normalize weights of m before
+            adding a new layer.
+        noise (bool, True) - if True, add noise to the new layer weights.
+    """
+
     if "Linear" in m.__class__.__name__:
         m2 = th.nn.Linear(m.out_features, m.out_features)
         m2.weight.data.copy_(th.eye(m.out_features))
@@ -202,13 +216,14 @@ def deeper(m, nonlin, bnorm_flag=False):
                                                  m2.kernel_size[0],
                                                  m2.kernel_size[0])
 
-        # TEST:normalize weights
-        for i in range(m.out_channels):
-            weight = m.weight.data
-            norm = weight.select(0, i).norm()
-            weight.div_(norm)
-            m.weight.data = weight
+        if weight_norm:
+            for i in range(m.out_channels):
+                weight = m.weight.data
+                norm = weight.select(0, i).norm()
+                weight.div_(norm)
+                m.weight.data = weight
 
+        # TODO: implement noise
         for i in range(0, m.out_channels):
             if m.weight.dim() == 4:
                 m2.weight.data.narrow(0, i, 1).narrow(1, i, 1).narrow(2, c, 1).narrow(3, c, 1).fill_(1)
