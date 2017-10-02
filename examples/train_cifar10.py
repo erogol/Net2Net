@@ -1,4 +1,3 @@
-from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
@@ -10,8 +9,10 @@ import sys
 sys.path.append('../')
 from net2net import wider, deeper
 import copy
-import time
 import numpy as np
+
+from utils import NLL_loss_instance
+from utils import PlotLearning
 
 
 # Training settings
@@ -41,18 +42,24 @@ torch.manual_seed(args.seed)
 if args.cuda:
     torch.cuda.manual_seed(args.seed)
 
-transform = transforms.Compose(
+train_transform = transforms.Compose(
+             [
+              transforms.ToTensor(),
+              transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+test_transform = transforms.Compose(
              [transforms.ToTensor(),
               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
 
-kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
+kwargs = {'num_workers': 8, 'pin_memory': True} if args.cuda else {}
 train_loader = torch.utils.data.DataLoader(
-    datasets.CIFAR10('./data', train=True, download=True, transform=transform),
+    datasets.CIFAR10('./data', train=True, download=True, transform=train_transform),
     batch_size=args.batch_size, shuffle=True, **kwargs)
 test_loader = torch.utils.data.DataLoader(
-    datasets.CIFAR10('./data', train=False, transform=transform),
+    datasets.CIFAR10('./data', train=False, transform=test_transform),
     batch_size=args.test_batch_size, shuffle=True, **kwargs)
+
 
 class Net(nn.Module):
     def __init__(self):
@@ -67,8 +74,6 @@ class Net(nn.Module):
         self.bn3 = nn.BatchNorm2d(32)
         self.pool3 = nn.AvgPool2d(5, 1)
         self.fc1 = nn.Linear(32 * 3 * 3, 10)
-        #self.bn_fc = nn.BatchNorm1d(256)
-        #self.fc2 = nn.Linear(256, 10)
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
@@ -93,9 +98,6 @@ class Net(nn.Module):
             x = self.pool3(x)
             x = x.view(-1, x.size(1) * x.size(2) * x.size(3))
             x = self.fc1(x)
-            #x = self.bn_fc(x)
-            #x = F.relu(x)
-            #x = self.fc2(x)
             return F.log_softmax(x)
         except RuntimeError:
             print(x.size())
@@ -147,28 +149,29 @@ class Net(nn.Module):
         print(self)
 
 
-model = Net()
-if args.cuda:
-    model.cuda()
-
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
-
 def train(epoch):
     model.train()
+    avg_loss = 0
+    avg_accu = 0
     for batch_idx, (data, target) in enumerate(train_loader):
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data), Variable(target)
         optimizer.zero_grad()
         output = model(data)
-        loss = F.nll_loss(output, target)
+        loss = criterion(output, target)
         loss.backward()
         optimizer.step()
+        pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
+        avg_accu += pred.eq(target.data.view_as(pred)).cpu().sum()
+        avg_loss += loss.data[0]
         if batch_idx % args.log_interval == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.data[0]))
+    avg_loss /= batch_idx + 1
+    avg_accu = avg_accu / len(train_loader.dataset)
+    return avg_accu, avg_loss
 
 
 def test():
@@ -180,15 +183,31 @@ def test():
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data, volatile=True), Variable(target)
         output = model(data)
-        test_loss += F.nll_loss(output, target, size_average=False).data[0] # sum up batch loss
-        pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
+        test_loss += F.nll_loss(output, target, size_average=False).data[0]  # sum up batch loss
+        pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
         correct += pred.eq(target.data.view_as(pred)).cpu().sum()
 
     test_loss /= len(test_loader.dataset)
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
-    return 100. * correct / len(test_loader.dataset), test_loss
+    return correct / len(test_loader.dataset), test_loss
+
+
+def run_training(model, run_name):
+    global optimizer
+    model.cuda()
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    plot = PlotLearning('./', 10, prefix=run_name)
+    for epoch in range(1, args.epochs + 1):
+        accu_train, loss_train = train(epoch)
+        accu_test, loss_test = test()
+        logs = {}
+        logs['acc'] = accu_train
+        logs['val_acc'] = accu_test
+        logs['loss'] = loss_train
+        logs['val_loss'] = loss_test
+        plot.plot(logs)
 
 
 def net2net_deeper_recursive(model):
@@ -203,14 +222,11 @@ def net2net_deeper_recursive(model):
 
 
 print("\n\n > Teacher training ... ")
-# treacher training
-teacher_losses = []
-teacher_accus = []
-for epoch in range(1, args.epochs + 1):
-    train(epoch)
-    accu, loss = test()
-    teacher_losses.append(loss)
-    teacher_accus.append(accu)
+model = Net()
+model.cuda()
+# criterion = NLL_loss_instance(1)
+criterion = nn.NLLLoss()
+run_training(model, 'Teacher_')
 
 
 # wider student training
@@ -221,37 +237,7 @@ model_ = copy.deepcopy(model)
 del model
 model = model_
 model.net2net_wider()
-model.cuda()
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-wider_accus = []
-wider_losses = []
-for epoch in range(1, args.epochs + 1):
-    train(epoch)
-    accu, loss = test()
-    wider_accus.append(accu)
-    wider_losses.append(loss)
-
-#accu_iter = []
-#loss_iter = []
-#for i in range(10):
-#    print("Deeper {} -----".format(i))
-#    model_ = Net()
-#    model_ = copy.deepcopy(model)
-#    model = model_
-#    model = net2net_deeper_recursive(model)
-#    model.cuda()
-#
-#    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-#    deeper_accus = []
-#    deeper_losses = []
-#    for epoch in range(1, args.epochs + 1):
-#        train(epoch)
-#        accu, loss = test()
-#        deeper_accus.append(accu)
-#        deeper_losses.append(loss)
-#    accu_iter.append(deeper_accus)
-#    loss_iter.append(deeper_losses)
-
+run_training(model, 'Wider_student_')
 
 # wider + deeper student training
 print("\n\n > Wider+Deeper Student training ... ")
@@ -262,16 +248,7 @@ model_ = copy.deepcopy(model)
 del model
 model = model_
 model.net2net_deeper()
-model.cuda()
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-deeper_accus = []
-deeper_losses = []
-for epoch in range(1, args.epochs + 1):
-    train(epoch)
-    accu, loss = test()
-    deeper_accus.append(accu)
-    deeper_losses.append(loss)
-
+run_training(model, 'WiderDeeper_student_')
 
 # wider teacher training
 print("\n\n > Wider teacher training ... ")
@@ -281,15 +258,7 @@ del model
 model = model_
 model.define_wider()
 model.cuda()
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-wider_teacher_losses = []
-wider_teacher_accus = []
-for epoch in range(1, 2*args.epochs+1):
-    train(epoch)
-    accu, loss = test()
-    wider_teacher_losses.append(loss)
-    wider_teacher_accus.append(accu)
-
+run_training(model, 'Wider_teacher_')
 
 
 # wider deeper teacher training
@@ -299,24 +268,5 @@ model_ = Net()
 del model
 model = model_
 model.define_wider_deeper()
-model.cuda()
-optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-wider_deeper_teacher_accus = []
-wider_deeper_teacher_losses = []
-for epoch in range(1, 3*args.epochs+1):
-    train(epoch)
-    accu, loss = test()
-    wider_deeper_teacher_accus.append(accu)
-    wider_deeper_teacher_losses.append(loss)
+run_training(model, 'Wider_Deeper_teacher')
 
-
-print(" -> Teacher:\t{}\t{}".format(np.max(teacher_accus),
-                                    np.min(teacher_losses)))
-print(" -> Wider model:\t{}\t{}".format(np.max(wider_accus),
-                                        np.min(wider_losses)))
-print(" -> Deeper-Wider model:\t{}\t{}".format(np.max(deeper_accus),
-                                               np.min(deeper_losses)))
-print(" -> Wider teacher:\t{}\t{}".format(np.max(wider_teacher_accus),
-                                          np.min(wider_teacher_losses)))
-print(" -> Deeper-Wider teacher:\t{}\t{}".format(np.max(wider_deeper_teacher_accus),
-                                                 np.min(wider_deeper_teacher_losses)))
