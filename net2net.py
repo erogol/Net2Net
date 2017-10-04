@@ -223,12 +223,16 @@ def deeper(m, nonlin, bnorm_flag=False, weight_norm=True, noise=True):
                 weight.div_(norm)
                 m.weight.data = weight
 
-        # TODO: implement noise
         for i in range(0, m.out_channels):
             if m.weight.dim() == 4:
                 m2.weight.data.narrow(0, i, 1).narrow(1, i, 1).narrow(2, c, 1).narrow(3, c, 1).fill_(1)
             elif m.weight.dim() == 5:
                 m2.weight.data.narrow(0, i, 1).narrow(1, i, 1).narrow(2, c_d, 1).narrow(3, c_wh, 1).narrow(4, c_wh, 1).fill_(1)
+
+        if noise:
+            noise = np.random.normal(scale=5e-2 * m2.weight.data.std(),
+                                     size=list(m2.weight.size()))
+            m2.weight.data += th.FloatTensor(noise).type_as(m2.weight.data)
 
         if restore:
             m2.weight.data = m2.weight.data.view(m2.weight.size(0),

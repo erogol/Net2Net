@@ -1,4 +1,5 @@
 import argparse
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,8 +34,10 @@ parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=1000, metavar='N',
                     help='how many batches to wait before logging status')
-parser.add_argument('--noise', type=float, default=0.01,
-                    help='noise variance for wider operator')
+parser.add_argument('--noise', type=int, default=1,
+                    help='noise or no noise 0-1')
+parser.add_argument('--weight_norm', type=int, default=1,
+                    help='norm or no weight norm 0-1')
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -104,19 +107,19 @@ class Net(nn.Module):
 
     def net2net_wider(self):
         self.conv1, self.conv2, _ = wider(self.conv1, self.conv2, 12,
-                                          self.bn1, noise_var=args.noise)
+                                          self.bn1, noise=args.noise)
         self.conv2, self.conv3, _ = wider(self.conv2, self.conv3, 24,
-                                          self.bn2, noise_var=args.noise)
+                                          self.bn2, noise=args.noise)
         self.conv3, self.fc1, _ = wider(self.conv3, self.fc1, 48,
-                                        self.bn3, noise_var=args.noise)
+                                        self.bn3, noise=args.noise)
         print(self)
 
     def net2net_deeper(self):
-        s = deeper(self.conv1, nn.ReLU, bnorm_flag=True)
+        s = deeper(self.conv1, nn.ReLU, bnorm_flag=True, weight_norm=args.weight_norm, noise=args.noise)
         self.conv1 = s
-        s = deeper(self.conv2, nn.ReLU, bnorm_flag=True)
+        s = deeper(self.conv2, nn.ReLU, bnorm_flag=True, weight_norm=args.weight_norm, noise=args.noise)
         self.conv2 = s
-        s = deeper(self.conv3, nn.ReLU, bnorm_flag=True)
+        s = deeper(self.conv3, nn.ReLU, bnorm_flag=True, weight_norm=args.weight_norm, noise=args.noise)
         self.conv3 = s
         print(self)
 
@@ -208,12 +211,13 @@ def test():
     return correct / len(test_loader.dataset), test_loss
 
 
-def run_training(model, run_name):
+def run_training(model, run_name, epochs, plot=None):
     global optimizer
     model.cuda()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    plot = PlotLearning('./', 10, prefix=run_name)
-    for epoch in range(1, args.epochs + 1):
+    if plot is None:
+        plot = PlotLearning('./plots/cifar/', 10, prefix=run_name)
+    for epoch in range(1, epochs + 1):
         accu_train, loss_train = train(epoch)
         accu_test, loss_test = test()
         logs = {}
@@ -222,15 +226,16 @@ def run_training(model, run_name):
         logs['loss'] = loss_train
         logs['val_loss'] = loss_test
         plot.plot(logs)
+    return plot
 
 
 if __name__ == "__main__":
-
+    start_t = time.time()
     print("\n\n > Teacher training ... ")
     model = Net()
     model.cuda()
     criterion = nn.NLLLoss()
-    run_training(model, 'Teacher_')
+    plot = run_training(model, 'Teacher_', (args.epochs + 1) // 3)
 
     # wider student training
     print("\n\n > Wider Student training ... ")
@@ -240,7 +245,7 @@ if __name__ == "__main__":
     del model
     model = model_
     model.net2net_wider()
-    run_training(model, 'Wider_student_')
+    plot = run_training(model, 'Wider_student_', (args.epochs + 1) // 3, plot)
 
     # wider + deeper student training
     print("\n\n > Wider+Deeper Student training ... ")
@@ -251,9 +256,11 @@ if __name__ == "__main__":
     del model
     model = model_
     model.net2net_deeper()
-    run_training(model, 'WiderDeeper_student_')
+    run_training(model, 'WiderDeeper_student_', (args.epochs + 1) // 3, plot)
+    print(" >> Time tkaen by whole net2net training  {}".format(time.time() - start_t))
 
     # wider teacher training
+    start_t = time.time()
     print("\n\n > Wider teacher training ... ")
     model_ = Net()
 
@@ -261,14 +268,16 @@ if __name__ == "__main__":
     model = model_
     model.define_wider()
     model.cuda()
-    run_training(model, 'Wider_teacher_')
-
+    run_training(model, 'Wider_teacher_', args.epochs + 1)
+    print(" >> Time taken  {}".format(time.time() - start_t))
 
     # wider deeper teacher training
     print("\n\n > Wider+Deeper teacher training ... ")
+    start_t = time.time()
     model_ = Net()
 
     del model
     model = model_
     model.define_wider_deeper()
-    run_training(model, 'Wider_Deeper_teacher_')
+    run_training(model, 'Wider_Deeper_teacher_', args.epochs + 1)
+    print(" >> Time taken  {}".format(time.time() - start_t))
