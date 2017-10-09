@@ -259,7 +259,8 @@ def deeper(m, nonlin, bnorm_flag=False, weight_norm=True, noise=True):
     s.add_module('conv', m)
     if bnorm_flag:
         s.add_module('bnorm', bnorm)
-    s.add_module('nonlin', nonlin())
+    if nonlin is not None:
+        s.add_module('nonlin', nonlin())
     s.add_module('conv_new', m2)
 
     return s

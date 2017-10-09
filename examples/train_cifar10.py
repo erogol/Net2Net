@@ -123,6 +123,15 @@ class Net(nn.Module):
         self.conv3 = s
         print(self)
 
+    def net2net_deeper_nononline(self):
+        s = deeper(self.conv1, None, bnorm_flag=True, weight_norm=args.weight_norm, noise=args.noise)
+        self.conv1 = s
+        s = deeper(self.conv2, None, bnorm_flag=True, weight_norm=args.weight_norm, noise=args.noise)
+        self.conv2 = s
+        s = deeper(self.conv3, None, bnorm_flag=True, weight_norm=args.weight_norm, noise=args.noise)
+        self.conv3 = s
+        print(self)
+
     def define_wider(self):
         self.conv1 = nn.Conv2d(3, 12, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(12)
@@ -255,7 +264,7 @@ if __name__ == "__main__":
 
     del model
     model = model_
-    model.net2net_deeper()
+    model.net2net_deeper_nononline()
     run_training(model, 'WiderDeeper_student_', (args.epochs + 1) // 3, plot)
     print(" >> Time tkaen by whole net2net training  {}".format(time.time() - start_t))
 
